@@ -1,3 +1,4 @@
+
 """Seed the DB with realistic mock data. Capital: $20,000 USD."""
 
 import sqlite3
