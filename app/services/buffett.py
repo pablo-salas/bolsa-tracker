@@ -68,29 +68,56 @@ def find_cedear(ticker_usa: str) -> dict | None:
 # ── SEC EDGAR ─────────────────────────────────────────────
 
 
+async def _find_info_table_url(client: httpx.AsyncClient, cik: str, acc_nodash: str) -> str | None:
+    """Find the actual info table XML filename from the filing index."""
+    index_url = f"{EDGAR_ARCHIVES}/{cik}/{acc_nodash}/index.json"
+    try:
+        r = await client.get(index_url)
+        r.raise_for_status()
+        items = r.json().get("directory", {}).get("item", [])
+        for item in items:
+            name = item.get("name", "").lower()
+            if "infotable" in name and name.endswith(".xml"):
+                return f"{EDGAR_ARCHIVES}/{cik}/{acc_nodash}/{item['name']}"
+    except Exception:
+        pass
+    # Fallback: try common names
+    for name in ("infotable.xml", "InfoTable.xml", "informationtable.xml"):
+        try:
+            r = await client.head(f"{EDGAR_ARCHIVES}/{cik}/{acc_nodash}/{name}")
+            if r.status_code == 200:
+                return f"{EDGAR_ARCHIVES}/{cik}/{acc_nodash}/{name}"
+        except Exception:
+            pass
+    return None
+
+
 async def get_latest_13f_filings(count: int = 5) -> list[dict]:
+    cik_no_pad = BERKSHIRE_CIK.lstrip("0")
     async with httpx.AsyncClient(headers=HEADERS, timeout=30) as c:
         r = await c.get(f"{SEC_BASE}/submissions/CIK{BERKSHIRE_CIK}.json")
         r.raise_for_status()
 
-    data = r.json()
-    recent = data["filings"]["recent"]
-    filings = []
-    cik_no_pad = BERKSHIRE_CIK.lstrip("0")
+        data = r.json()
+        recent = data["filings"]["recent"]
+        filings = []
 
-    for i in range(len(recent["form"])):
-        if recent["form"][i] == "13F-HR" and len(filings) < count:
-            acc = recent["accessionNumber"][i]
-            acc_nodash = acc.replace("-", "")
-            filings.append(
-                {
-                    "accession_number": acc,
-                    "filing_date": recent["filingDate"][i],
-                    "report_date": recent["reportDate"][i],
-                    "primary_doc_url": f"{EDGAR_ARCHIVES}/{cik_no_pad}/{acc_nodash}/{recent['primaryDocument'][i]}",
-                    "info_table_url": f"{EDGAR_ARCHIVES}/{cik_no_pad}/{acc_nodash}/infotable.xml",
-                }
-            )
+        for i in range(len(recent["form"])):
+            if recent["form"][i] == "13F-HR" and len(filings) < count:
+                acc = recent["accessionNumber"][i]
+                acc_nodash = acc.replace("-", "")
+
+                info_table_url = await _find_info_table_url(c, cik_no_pad, acc_nodash)
+
+                filings.append(
+                    {
+                        "accession_number": acc,
+                        "filing_date": recent["filingDate"][i],
+                        "report_date": recent["reportDate"][i],
+                        "primary_doc_url": f"{EDGAR_ARCHIVES}/{cik_no_pad}/{acc_nodash}/{recent['primaryDocument'][i]}",
+                        "info_table_url": info_table_url or f"{EDGAR_ARCHIVES}/{cik_no_pad}/{acc_nodash}/infotable.xml",
+                    }
+                )
     return filings
 
 
